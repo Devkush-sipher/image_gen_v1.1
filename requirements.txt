@@ -1,5 +1,5 @@
-
 streamlit>=1.35.0
-diffusers>=0.28.0
-torch>=2.3.0
+diffusers>=0.28.0        # Stable Diffusion pipeline
+transformers>=4.41.0     # 🔑 REQUIRED for diffusers
+torch>=2.3.0             # CUDA or CPU build; install the one that suits your hardware
 pillow>=10.3.0
