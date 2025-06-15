@@ -1,18 +1,55 @@
 
 import streamlit as st
 from PIL import Image, ImageFilter, ImageEnhance, ImageOps
-import io, time, random
+import torch
+from diffusers import StableDiffusionPipeline
+import contextlib, io, time
+import random
 
-from image_generator import ImageGeneratorAPI  # <-- new import
+# --------------------------------------------------------------------------
+# 📦  Local Stable Diffusion Generator
+# --------------------------------------------------------------------------
+@st.cache_resource(show_spinner=True)
+def load_pipeline(model_id: str = "runwayml/stable-diffusion-v1-5",
+                  device: str | None = None) -> StableDiffusionPipeline:
+    """Load the Stable Diffusion pipeline once and cache it."""
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=dtype)
+    pipe = pipe.to(device)
+    # Disable safety checker for speed (optional)
+    if hasattr(pipe, "safety_checker"):
+        pipe.safety_checker = lambda images, **kwargs: (images, False)
+    return pipe
 
+def generate_image(prompt: str,
+                   guidance_scale: float = 7.5,
+                   steps: int = 30,
+                   seed: int | None = None) -> Image.Image:
+    pipe = load_pipeline()
+    device = pipe.device
+    generator = torch.Generator(device=device).manual_seed(seed) if seed is not None else None
+
+    with torch.autocast(device.type) if device.type == "cuda" else contextlib.nullcontext():
+        result = pipe(
+            prompt,
+            guidance_scale=guidance_scale,
+            num_inference_steps=steps,
+            generator=generator
+        )
+    return result.images[0]
+
+# --------------------------------------------------------------------------
+# 🎨  Streamlit UI
+# --------------------------------------------------------------------------
 st.set_page_config(
-    page_title="AI Image Studio",
+    page_title="AI Image Studio (Local)",
     page_icon="🎨",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# -----------------------------  CSS  ---------------------------------------
 st.markdown("""<style>
 .main-header {text-align:center;padding:2rem 0;
     background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
@@ -61,7 +98,7 @@ def create_processing_animation():
     container = st.empty()
     msgs = [
         "🔍 Analyzing prompt...",
-        "🧠 Contacting AI servers...",
+        "🧠 Running Stable Diffusion locally...",
         "✨ Painting pixels...",
         "🚀 Almost done..."
     ]
@@ -77,7 +114,7 @@ def create_processing_animation():
 # -----------------------------  Layout  ------------------------------------
 st.markdown("""<div class='main-header'>
     <h1>🎨 AI Image Studio</h1>
-    <p>Generate & transform images with the power of hosted Generative AI – no hefty downloads!</p>
+    <p>Generate & transform images with on‑device Stable Diffusion.</p>
 </div>""", unsafe_allow_html=True)
 
 tab1, tab2 = st.tabs(["🖼️ Generate", "🛠️ Edit (local)"])
@@ -86,23 +123,31 @@ tab1, tab2 = st.tabs(["🖼️ Generate", "🛠️ Edit (local)"])
 with tab1:
     prompt_gen = st.text_area("Enter a creative prompt", height=100,
                                placeholder="e.g., A serene landscape in neon cyberpunk style")
-    cols = st.columns([1,1,1,1])
-    with cols[1]:
-        if st.button("🚀 Generate Image", use_container_width=True):
-            if not prompt_gen.strip():
-                st.error("Please enter a prompt.")
-            else:
-                create_processing_animation()
-                try:
-                    generator = ImageGeneratorAPI()
-                    img = generator.generate(prompt_gen)
-                    st.image(img, caption="Generated Image", use_column_width=True)
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    st.download_button("📥 Download", data=buf.getvalue(),
-                                       file_name="generated.png", mime="image/png")
-                except Exception as e:
-                    st.error(f"Generation failed: {e}")
+    seed_col, scale_col, steps_col = st.columns(3)
+    with seed_col:
+        seed_val = st.number_input("Seed (optional)", value=0, step=1)
+        if seed_val == 0:
+            seed_val = None
+    with scale_col:
+        scale_val = st.slider("Guidance scale", min_value=1.0, max_value=15.0, value=7.5, step=0.5)
+    with steps_col:
+        steps_val = st.slider("Steps", min_value=10, max_value=60, value=30, step=5)
+
+    if st.button("🚀 Generate Image", use_container_width=True):
+        if not prompt_gen.strip():
+            st.error("Please enter a prompt.")
+        else:
+            create_processing_animation()
+            try:
+                img = generate_image(prompt_gen, guidance_scale=scale_val,
+                                     steps=steps_val, seed=seed_val)
+                st.image(img, caption="Generated Image", use_column_width=True)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                st.download_button("📥 Download", data=buf.getvalue(),
+                                   file_name="generated.png", mime="image/png")
+            except Exception as e:
+                st.error(f"Generation failed: {e}")
 
 # -------------------------  Tab 2 – Local Edit  ----------------------------
 with tab2:
@@ -126,4 +171,4 @@ with tab2:
 
 # -----------------------------  Footer  ------------------------------------
 st.markdown("""---<div style='text-align:center;color:#666;padding:2rem;'>
-Made with ❤️ using Streamlit & Stability AI</div>""", unsafe_allow_html=True)
+Made with ❤️ using Streamlit & Stable Diffusion</div>""", unsafe_allow_html=True)
